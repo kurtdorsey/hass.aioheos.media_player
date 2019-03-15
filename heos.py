@@ -6,12 +6,21 @@ import asyncio
 import logging
 import voluptuous as vol
 
-from homeassistant.components.media_player import ( # pylint: disable=no-name-in-module
-    PLATFORM_SCHEMA, MEDIA_TYPE_MUSIC,
-    SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_SET, # SUPPORT_VOLUME_STEP,
-    SUPPORT_STOP, SUPPORT_PAUSE, SUPPORT_PLAY_MEDIA,
-    SUPPORT_PREVIOUS_TRACK, SUPPORT_NEXT_TRACK, SUPPORT_SEEK,
-    SUPPORT_PLAY, MediaPlayerDevice)
+from homeassistant.components.media_player import (
+    MEDIA_PLAYER_SCHEMA, MediaPlayerDevice)
+
+from homeassistant.components.media_player.const import (
+    DOMAIN, MEDIA_TYPE_MUSIC, SUPPORT_NEXT_TRACK, SUPPORT_PAUSE, SUPPORT_PLAY,
+    SUPPORT_PLAY_MEDIA, SUPPORT_PREVIOUS_TRACK, SUPPORT_SEEK,SUPPORT_STOP,
+    SUPPORT_SELECT_SOUND_MODE, SUPPORT_SELECT_SOURCE, SUPPORT_SHUFFLE_SET,
+    SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_SET)
+
+# from homeassistant.components.media_player.const import ( # pylint: disable=no-name-in-module
+#     PLATFORM_SCHEMA, MEDIA_TYPE_MUSIC,
+#     SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_SET, # SUPPORT_VOLUME_STEP,
+#     SUPPORT_STOP, SUPPORT_PAUSE, SUPPORT_PLAY_MEDIA,
+#     SUPPORT_PREVIOUS_TRACK, SUPPORT_NEXT_TRACK, SUPPORT_SEEK,
+#     SUPPORT_PLAY )
 from homeassistant.const import (
     CONF_HOST, CONF_NAME, STATE_PAUSED, STATE_PLAYING, STATE_UNKNOWN, STATE_OFF)
 import homeassistant.helpers.config_validation as cv
@@ -24,7 +33,7 @@ SUPPORT_HEOS = SUPPORT_PLAY | SUPPORT_STOP | SUPPORT_PAUSE | SUPPORT_PLAY_MEDIA 
         SUPPORT_PREVIOUS_TRACK | SUPPORT_NEXT_TRACK | \
         SUPPORT_VOLUME_MUTE | SUPPORT_VOLUME_SET | SUPPORT_SEEK
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
+PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_HOST): cv.string,
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
 })
@@ -44,13 +53,32 @@ def async_setup_platform(hass, config, async_add_devices, discover_info=None):
 
     hass.loop.set_debug(True)
     heos = HeosMediaPlayer(hass, host, name)
-
+    
+    #Get the first seaker
     yield from heos.heos.connect(
         host=host,
         callback=heos.async_update_ha_state
         )
 
-    async_add_devices([heos])
+    # First speaker finds the rest
+    speakers = heos.heos._players
+    heos_list = []
+    heos_list.append(heos)
+    for speaker in speakers:
+        if speaker['ip'] == host:
+            continue
+        _LOGGER.info ('Adding Speaker {0} {1}'.format(speaker['name'], speaker['ip']))
+        new_speaker = HeosMediaPlayer(hass, speaker['ip'], speaker['name'])
+        yield from new_speaker.heos.connect(
+                                            host=speaker['ip'],
+                                            callback=new_speaker.async_update_ha_state
+                                            )
+        heos_list.append(new_speaker)
+
+     #add_entities([PowerRiseDevice(hub=power_rise_hub, 
+     #                                     name=shade,
+     #                                     room='Master') for shade in shades], True)
+    async_add_devices(heos_list)
 
 
 class HeosMediaPlayer(MediaPlayerDevice):
@@ -65,9 +93,11 @@ class HeosMediaPlayer(MediaPlayerDevice):
         if host is None:
             _LOGGER.info('No host provided, will try to discover...')
         self._hass = hass
+        self._h = host
         self.heos = AioHeos(loop=hass.loop, host=host, verbose=True)
         self._name = name
         self._state = None
+
 
     @asyncio.coroutine
     def async_update(self):
@@ -141,6 +171,10 @@ class HeosMediaPlayer(MediaPlayerDevice):
         """Boolean if volume is currently muted."""
         muted_state = self.heos.get_mute_state()
         return muted_state == 'on'
+
+    @asyncio.coroutine
+    def request_players(self):
+        return self.heos.request_players()
 
     @asyncio.coroutine
     def async_mute_volume(self, mute): # pylint: disable=unused-argument
